@@ -1,0 +1,9 @@
+{
+  "biotime_url": "http://CHANGE_ME:8090",
+  "biotime_user": "CHANGE_ME",
+  "biotime_password": "CHANGE_ME",
+  "erp_url": "https://CHANGE_ME/process.php",
+  "temperature": 36.5,
+  "lookback_minutes_on_first_run": 60,
+  "page_size": 200
+}
