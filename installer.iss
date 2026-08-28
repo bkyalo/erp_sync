@@ -148,28 +148,17 @@ end;
 
 function RegisterTaskCommand(): String;
 begin
-  { $ErrorActionPreference = 'Stop' + try/catch + explicit exit 1 make a real
-    failure actually produce a nonzero exit code -- otherwise a non-terminating
-    PowerShell error can leave powershell.exe exiting 0 with nothing registered
-    and no way to tell from the installer's side. }
+  { schtasks' MINUTE schedule type repeats indefinitely by design -- no
+    "repetition duration" concept to get wrong. PowerShell's
+    Register-ScheduledTask + RepetitionInterval/RepetitionDuration route was
+    tried first and rejected two different explicit Duration values
+    ([TimeSpan]::MaxValue, then a 100-year span) as "incorrectly formatted or
+    out of range" on the actual target machine, so this avoids that whole
+    mechanism. schtasks also gives a real, reliable exit code and error text
+    on stdout/stderr, unlike a PowerShell non-terminating error. }
   Result :=
-    '$ErrorActionPreference = ''Stop'';' +
-    'try {' +
-    '$action = New-ScheduledTaskAction -Execute ''' + ExpandConstant('{app}\{#MyAppExeName}') + ''';' +
-    { [TimeSpan]::MaxValue looks like it clamps to the schema's max duration
-      (P99999999DT23H59M59S) but Task Scheduler still rejects it as
-      out-of-range; an explicit large-but-valid span (100 years) works and
-      is effectively "forever" for this purpose. }
-    '$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) ' +
-    '-RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 36500);' +
-    '$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries;' +
-    'Register-ScheduledTask -TaskName ''{#MyTaskName}'' -Action $action -Trigger $trigger ' +
-    '-Settings $settings -User ''NT AUTHORITY\SYSTEM'' -RunLevel Highest -Force | Out-Null;' +
-    'Write-Output ''Task registered successfully.''' +
-    '} catch {' +
-    'Write-Error $_.Exception.Message;' +
-    'exit 1' +
-    '}';
+    'schtasks /create /tn "{#MyTaskName}" /tr "' + ExpandConstant('{app}\{#MyAppExeName}') + '" ' +
+    '/sc minute /mo 5 /ru SYSTEM /rl highest /f';
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -184,11 +173,10 @@ begin
     if not FileExists(ConfigPath) then
       SaveStringToFile(ConfigPath, BuildConfigJson(), False);
 
-    { Run via cmd.exe so stdout/stderr can be redirected to a log file for
-      diagnosis; Exec() alone can't capture powershell.exe's output. }
+    { Redirect stdout/stderr to a log file for diagnosis -- Exec() alone
+      can't capture schtasks' own output. }
     TaskLogPath := ExpandConstant('{app}\task_register.log');
-    Cmd := '/c powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' +
-      RegisterTaskCommand() + '" > "' + TaskLogPath + '" 2>&1';
+    Cmd := '/c ' + RegisterTaskCommand() + ' > "' + TaskLogPath + '" 2>&1';
     if not Exec('cmd.exe', Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
       MsgBox('Could not register the scheduled task automatically. See ' + TaskLogPath +
         ' for details, or create it manually with schtasks or Task Scheduler.', mbError, MB_OK);
@@ -201,8 +189,7 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
-    Exec('powershell.exe',
-      '-NoProfile -ExecutionPolicy Bypass -Command "Unregister-ScheduledTask -TaskName ''{#MyTaskName}'' -Confirm:$false -ErrorAction SilentlyContinue"',
+    Exec('cmd.exe', '/c schtasks /delete /tn "{#MyTaskName}" /f',
       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   end;
 end;
