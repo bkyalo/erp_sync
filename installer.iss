@@ -156,8 +156,12 @@ begin
     '$ErrorActionPreference = ''Stop'';' +
     'try {' +
     '$action = New-ScheduledTaskAction -Execute ''' + ExpandConstant('{app}\{#MyAppExeName}') + ''';' +
+    { [TimeSpan]::MaxValue looks like it clamps to the schema's max duration
+      (P99999999DT23H59M59S) but Task Scheduler still rejects it as
+      out-of-range; an explicit large-but-valid span (100 years) works and
+      is effectively "forever" for this purpose. }
     '$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) ' +
-    '-RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue);' +
+    '-RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 36500);' +
     '$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries;' +
     'Register-ScheduledTask -TaskName ''{#MyTaskName}'' -Action $action -Trigger $trigger ' +
     '-Settings $settings -User ''NT AUTHORITY\SYSTEM'' -RunLevel Highest -Force | Out-Null;' +
