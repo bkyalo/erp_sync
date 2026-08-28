@@ -99,7 +99,8 @@ end;
 
 procedure CurPageChanged(CurPageID: Integer);
 var
-  ConfigPath, ExistingJson: String;
+  ConfigPath: String;
+  ExistingJson: AnsiString;
 begin
   { Pre-fill from an existing config.json (a prior install) so a reinstall
     shows current values to review/edit instead of forcing blind re-entry
