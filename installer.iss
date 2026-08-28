@@ -236,7 +236,7 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    { config.json lives in %ProgramData%\ERPSync, not {app} (Program Files),
+    { config.json lives in %ProgramData%\ERPSync, not the install directory,
       so the exe can read/write its config, state, and log without needing
       elevation when run manually -- Program Files is admin-write-only.
       The wizard page was pre-filled from any existing config.json (see
