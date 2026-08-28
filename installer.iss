@@ -1,8 +1,10 @@
 ; ERP Attendance Sync installer.
 ; Installs sync_attendance_to_erp.exe, asks for the BioTime and ERP
-; connection details on a custom wizard page, writes them to config.json,
-; and registers a Scheduled Task that runs it every 5 minutes indefinitely,
-; as SYSTEM.
+; connection details on a custom wizard page, writes them to config.json in
+; %ProgramData%\ERPSync (the exe reads/writes config, state, and its log
+; there rather than next to itself in Program Files, which is admin-write-
+; only), and registers a Scheduled Task that runs it every 5 minutes
+; indefinitely, as SYSTEM.
 ;
 ; Built by CI (see .github/workflows/build-installer.yml) with:
 ;   iscc installer.iss
@@ -43,7 +45,7 @@ procedure InitializeWizard;
 begin
   ConfigPage := CreateInputQueryPage(wpSelectDir,
     'ERP Sync Settings', 'Enter the BioTime and ERP connection details',
-    'These values are written to config.json. If a config.json already exists here, its current values are shown below -- leave them as-is to keep them, or edit to update.');
+    'These values are written to config.json in %ProgramData%\ERPSync (not the install folder, so the exe can run without elevation). If one already exists there, its current values are shown below -- leave them as-is to keep them, or edit to update.');
   ConfigPage.Add('BioTime URL (e.g. http://192.168.1.171:8090):', False);
   ConfigPage.Add('BioTime username:', False);
   ConfigPage.Add('BioTime password:', True);
@@ -107,7 +109,7 @@ begin
     of data that, previously, would have been silently discarded anyway. }
   if CurPageID = ConfigPage.ID then
   begin
-    ConfigPath := ExpandConstant('{app}\config.json');
+    ConfigPath := ExpandConstant('{commonappdata}\ERPSync\config.json');
     if FileExists(ConfigPath) and LoadStringFromFile(ConfigPath, ExistingJson) then
     begin
       ConfigPage.Values[0] := GetJsonLineValue(ExistingJson, 'biotime_url');
@@ -234,11 +236,15 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
-    { The wizard page was pre-filled from any existing config.json (see
+    { config.json lives in %ProgramData%\ERPSync, not {app} (Program Files),
+      so the exe can read/write its config, state, and log without needing
+      elevation when run manually -- Program Files is admin-write-only.
+      The wizard page was pre-filled from any existing config.json (see
       CurPageChanged), so what's here now is either the prior values
       unchanged or deliberately edited -- always write it, rather than
       silently discarding whatever the user just entered on a reinstall. }
-    ConfigPath := ExpandConstant('{app}\config.json');
+    ForceDirectories(ExpandConstant('{commonappdata}\ERPSync'));
+    ConfigPath := ExpandConstant('{commonappdata}\ERPSync\config.json');
     SaveStringToFile(ConfigPath, BuildConfigJson(), False);
 
     { Redirect stdout/stderr to a log file for diagnosis -- Exec() alone

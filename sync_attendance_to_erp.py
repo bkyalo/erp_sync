@@ -10,10 +10,13 @@ Each run:
      scheduled run) never re-sends a punch that was already delivered, and
      a failed punch is retried next time instead of being skipped.
 
-Config comes from config.json (copy config.example.json and fill it in) with
-env vars BIOTIME_USER / BIOTIME_PASSWORD as an override for credentials so
-they don't have to live in a file if you'd rather set them on the scheduled
-task itself.
+config.json/state.json/sync.log all live under %ProgramData%\\ERPSync, not
+next to the exe in Program Files -- the exe's own folder is admin-write-only,
+which would otherwise force even a manual test run into an elevated prompt.
+Copy config.example.json (shipped next to the exe) to that location and fill
+it in, or let the installer's wizard do it. Env vars BIOTIME_USER /
+BIOTIME_PASSWORD override the file's credentials, if you'd rather set them
+on the scheduled task itself.
 """
 
 from __future__ import annotations
@@ -29,14 +32,10 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
-FOLDER = (
-    Path(sys.executable).resolve().parent
-    if getattr(sys, "frozen", False)
-    else Path(__file__).resolve().parent
-)
-CONFIG_PATH = FOLDER / "config.json"
-STATE_PATH = FOLDER / "state.json"
-LOG_PATH = FOLDER / "sync.log"
+DATA_DIR = Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "ERPSync"
+CONFIG_PATH = DATA_DIR / "config.json"
+STATE_PATH = DATA_DIR / "state.json"
+LOG_PATH = DATA_DIR / "sync.log"
 
 PUNCH_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -157,6 +156,7 @@ def send_to_erp(erp_url: str, emp_code: str, punch_epoch: int, temperature: floa
 
 
 def main() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
