@@ -1,6 +1,8 @@
 ; ERP Attendance Sync installer.
-; Installs sync_attendance_to_erp.exe and registers a Scheduled Task that
-; runs it every 5 minutes indefinitely, as SYSTEM.
+; Installs sync_attendance_to_erp.exe, asks for the BioTime and ERP
+; connection details on a custom wizard page, writes them to config.json,
+; and registers a Scheduled Task that runs it every 5 minutes indefinitely,
+; as SYSTEM.
 ;
 ; Built by CI (see .github/workflows/build-installer.yml) with:
 ;   iscc installer.iss
@@ -34,33 +36,158 @@ Source: "config.example.json"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 
 [Code]
+var
+  ConfigPage: TInputQueryWizardPage;
+
+procedure InitializeWizard;
+begin
+  ConfigPage := CreateInputQueryPage(wpSelectDir,
+    'ERP Sync Settings', 'Enter the BioTime and ERP connection details',
+    'These values are written to config.json.');
+  ConfigPage.Add('BioTime URL (e.g. http://192.168.1.171:8090):', False);
+  ConfigPage.Add('BioTime username:', False);
+  ConfigPage.Add('BioTime password:', True);
+  ConfigPage.Add('ERP URL (e.g. https://yoursite.digerp.com/process.php):', False);
+  ConfigPage.Add('Default temperature (e.g. 36.5):', False);
+
+  ConfigPage.Values[4] := '36.5';
+end;
+
+function HasUrlScheme(S: String): Boolean;
+begin
+  Result := (Pos('http://', S) = 1) or (Pos('https://', S) = 1);
+end;
+
+function IsValidNumber(S: String): Boolean;
+var
+  I: Integer;
+  DotSeen: Boolean;
+begin
+  Result := S <> '';
+  DotSeen := False;
+  for I := 1 to Length(S) do
+  begin
+    if S[I] = '.' then
+    begin
+      if DotSeen then
+      begin
+        Result := False;
+        break;
+      end;
+      DotSeen := True;
+    end
+    else if (S[I] < '0') or (S[I] > '9') then
+    begin
+      Result := False;
+      break;
+    end;
+  end;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if CurPageID = ConfigPage.ID then
+  begin
+    if not HasUrlScheme(Trim(ConfigPage.Values[0])) then
+    begin
+      MsgBox('BioTime URL must start with http:// or https://', mbError, MB_OK);
+      Result := False;
+    end
+    else if Trim(ConfigPage.Values[1]) = '' then
+    begin
+      MsgBox('BioTime username is required.', mbError, MB_OK);
+      Result := False;
+    end
+    else if Trim(ConfigPage.Values[2]) = '' then
+    begin
+      MsgBox('BioTime password is required.', mbError, MB_OK);
+      Result := False;
+    end
+    else if not HasUrlScheme(Trim(ConfigPage.Values[3])) then
+    begin
+      MsgBox('ERP URL must start with http:// or https://', mbError, MB_OK);
+      Result := False;
+    end
+    else if not IsValidNumber(Trim(ConfigPage.Values[4])) then
+    begin
+      MsgBox('Default temperature must be a number.', mbError, MB_OK);
+      Result := False;
+    end;
+  end;
+end;
+
+function JsonEscape(S: String): String;
+begin
+  StringChangeEx(S, '\', '\\', True);
+  StringChangeEx(S, '"', '\"', True);
+  Result := S;
+end;
+
+function BuildConfigJson(): String;
+var
+  BiotimeUrl, BiotimeUser, BiotimePassword, ErpUrl, Temperature: String;
+begin
+  BiotimeUrl := JsonEscape(Trim(ConfigPage.Values[0]));
+  BiotimeUser := JsonEscape(Trim(ConfigPage.Values[1]));
+  BiotimePassword := JsonEscape(Trim(ConfigPage.Values[2]));
+  ErpUrl := JsonEscape(Trim(ConfigPage.Values[3]));
+  Temperature := Trim(ConfigPage.Values[4]);
+
+  Result :=
+    '{' + #13#10 +
+    '  "biotime_url": "' + BiotimeUrl + '",' + #13#10 +
+    '  "biotime_user": "' + BiotimeUser + '",' + #13#10 +
+    '  "biotime_password": "' + BiotimePassword + '",' + #13#10 +
+    '  "erp_url": "' + ErpUrl + '",' + #13#10 +
+    '  "temperature": ' + Temperature + ',' + #13#10 +
+    '  "lookback_minutes_on_first_run": 60,' + #13#10 +
+    '  "page_size": 200' + #13#10 +
+    '}' + #13#10;
+end;
+
 function RegisterTaskCommand(): String;
 begin
+  { $ErrorActionPreference = 'Stop' + try/catch + explicit exit 1 make a real
+    failure actually produce a nonzero exit code -- otherwise a non-terminating
+    PowerShell error can leave powershell.exe exiting 0 with nothing registered
+    and no way to tell from the installer's side. }
   Result :=
+    '$ErrorActionPreference = ''Stop'';' +
+    'try {' +
     '$action = New-ScheduledTaskAction -Execute ''' + ExpandConstant('{app}\{#MyAppExeName}') + ''';' +
     '$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) ' +
     '-RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue);' +
     '$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries;' +
     'Register-ScheduledTask -TaskName ''{#MyTaskName}'' -Action $action -Trigger $trigger ' +
-    '-Settings $settings -User ''SYSTEM'' -RunLevel Highest -Force';
+    '-Settings $settings -User ''NT AUTHORITY\SYSTEM'' -RunLevel Highest -Force | Out-Null;' +
+    'Write-Output ''Task registered successfully.''' +
+    '} catch {' +
+    'Write-Error $_.Exception.Message;' +
+    'exit 1' +
+    '}';
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  ConfigPath, ExamplePath, Cmd: String;
+  ConfigPath, TaskLogPath, Cmd: String;
   ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
-    { Seed config.json from the template on first install; never overwrite an existing one. }
+    { Only seed config.json from the wizard answers on first install; never overwrite an existing one. }
     ConfigPath := ExpandConstant('{app}\config.json');
-    ExamplePath := ExpandConstant('{app}\config.example.json');
     if not FileExists(ConfigPath) then
-      FileCopy(ExamplePath, ConfigPath, False);
+      SaveStringToFile(ConfigPath, BuildConfigJson(), False);
 
-    Cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' + RegisterTaskCommand() + '"';
-    if not Exec('powershell.exe', Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
-      MsgBox('Could not register the scheduled task automatically. You can create it manually with schtasks or Task Scheduler.', mbError, MB_OK);
+    { Run via cmd.exe so stdout/stderr can be redirected to a log file for
+      diagnosis; Exec() alone can't capture powershell.exe's output. }
+    TaskLogPath := ExpandConstant('{app}\task_register.log');
+    Cmd := '/c powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' +
+      RegisterTaskCommand() + '" > "' + TaskLogPath + '" 2>&1';
+    if not Exec('cmd.exe', Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
+      MsgBox('Could not register the scheduled task automatically. See ' + TaskLogPath +
+        ' for details, or create it manually with schtasks or Task Scheduler.', mbError, MB_OK);
   end;
 end;
 

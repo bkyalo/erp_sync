@@ -56,6 +56,9 @@ def load_config() -> dict:
     missing = [key for key in required if not config.get(key) and config.get(key) != 0]
     if missing:
         sys.exit(f"config.json is missing: {', '.join(missing)}")
+    for key in ("biotime_url", "erp_url"):
+        if not config[key].startswith(("http://", "https://")):
+            sys.exit(f"config.json {key} must start with http:// or https:// (got: {config[key]!r})")
     config.setdefault("lookback_minutes_on_first_run", 60)
     config.setdefault("page_size", 200)
     return config
