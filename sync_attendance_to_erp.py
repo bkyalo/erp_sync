@@ -105,8 +105,12 @@ class BioTimeClient:
         req = urllib.request.Request(
             url, data=data, headers={"Content-Type": "application/json"}, method="POST"
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"POST /api-token-auth/ -> HTTP {exc.code}: {detail}") from exc
         token = result.get("token")
         if not token:
             raise RuntimeError(f"Login failed, no token in response: {result}")
@@ -170,9 +174,17 @@ def main() -> None:
         logging.info("No prior state found. First run will look back to %s.", last_punch_time)
 
     client = BioTimeClient(config["biotime_url"], config["biotime_user"], config["biotime_password"])
-    client.login()
+    try:
+        client.login()
+    except Exception:
+        logging.exception("BioTime login failed (check biotime_url/biotime_user/biotime_password).")
+        sys.exit(1)
 
-    rows = list(client.iter_new_transactions(last_punch_time, config["page_size"]))
+    try:
+        rows = list(client.iter_new_transactions(last_punch_time, config["page_size"]))
+    except Exception:
+        logging.exception("Failed to fetch transactions from BioTime.")
+        sys.exit(1)
     rows = [
         row
         for row in rows
